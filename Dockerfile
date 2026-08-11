@@ -1,5 +1,5 @@
-# WhatsHub Production Railway Dockerfile
-FROM node:20-alpine
+# WhatsHub Production Railway Dockerfile (Node.js 22 + Native WebSocket Support)
+FROM node:22-alpine
 
 WORKDIR /app
 
@@ -9,7 +9,8 @@ COPY . .
 # Install workspace dependencies
 RUN npm install --legacy-peer-deps
 
-# Build Express API backend
+# Build shared library first, then Express API backend
+RUN npm run build --workspace=@whatshub/shared
 RUN npm run build --workspace=@whatshub/api
 
 EXPOSE 5000
