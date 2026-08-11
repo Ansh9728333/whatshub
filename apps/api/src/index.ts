@@ -17,7 +17,7 @@ dotenv.config();
 
 const app = express();
 const server = http.createServer(app);
-const PORT = process.env.PORT || 5000;
+const PORT = parseInt(process.env.PORT || '5000', 10);
 
 // Security & Middleware
 app.use(helmet());
@@ -34,6 +34,14 @@ app.get('/health', (req, res) => {
     service: 'whatshub-api',
     database: 'connected',
     timestamp: new Date().toISOString(),
+  });
+});
+
+app.get('/', (req, res) => {
+  res.json({
+    status: 'ok',
+    message: 'WhatsHub Production Multi-Tenant API is Online',
+    health: '/health',
   });
 });
 
@@ -68,12 +76,25 @@ apiRouter.post('/campaigns/:id/launch', campaignController.launchCampaign);
 
 app.use('/api', apiRouter);
 
-// Start HTTP Server
-server.listen(PORT, async () => {
-  logger.info(`WhatsHub Backend API listening on port ${PORT}`);
+// Global Error Catchers to prevent container crash
+process.on('unhandledRejection', (reason: any) => {
+  logger.error('Unhandled Promise Rejection caught:', reason?.message || reason);
+});
+
+process.on('uncaughtException', (err: Error) => {
+  logger.error('Uncaught Exception caught:', err.message);
+});
+
+// Start HTTP Server binding to 0.0.0.0 for Railway
+server.listen(PORT, '0.0.0.0', async () => {
+  logger.info(`WhatsHub Backend API listening on 0.0.0.0:${PORT}`);
   
-  // Trigger Railway boot session restoration check
-  await SessionManager.restoreAllSessions();
+  try {
+    // Trigger Railway boot session restoration check safely
+    await SessionManager.restoreAllSessions();
+  } catch (err: any) {
+    logger.error('Startup session restoration warning:', err.message);
+  }
 });
 
 // Railway Graceful Shutdown Hooks
