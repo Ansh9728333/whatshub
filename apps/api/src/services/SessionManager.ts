@@ -92,7 +92,15 @@ export class SessionManager {
     // Connect Baileys WASocket
     try {
       const { state, saveCreds } = await useMultiFileAuthState(tempAuthDir);
-      const { version } = await fetchLatestBaileysVersion();
+      let version: [number, number, number] = [2, 3000, 1017531287];
+      try {
+        const fetched = await fetchLatestBaileysVersion();
+        if (fetched && fetched.version) {
+          version = fetched.version;
+        }
+      } catch (vErr) {
+        logger.warn('Using fallback Baileys version array.');
+      }
 
       logger.info(`Connecting Baileys socket for session ${sessionId} using WhatsApp Web v${version.join('.')}`);
 

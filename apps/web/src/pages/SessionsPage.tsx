@@ -65,6 +65,31 @@ export const SessionsPage: React.FC = () => {
     };
   }, [currentWorkspace, token]);
 
+  // Polling fallback when QR modal is active
+  useEffect(() => {
+    if (!showQrModal || !activeSessionId || !currentWorkspace || !token) return;
+
+    const interval = setInterval(async () => {
+      const res = await fetchApi(`/api/whatsapp/sessions/${activeSessionId}/health`, {
+        workspaceId: currentWorkspace.id,
+        token,
+      });
+
+      if (res.success && res.data) {
+        if (res.data.qrCodeUrl) {
+          setActiveQrUrl(res.data.qrCodeUrl);
+        }
+        if (res.data.session?.status === 'CONNECTED') {
+          setShowQrModal(false);
+          setActiveQrUrl(null);
+          loadSessions();
+        }
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [showQrModal, activeSessionId, currentWorkspace, token]);
+
   const handleConnectNewSlot = async () => {
     if (!currentWorkspace || !token) return;
     setLoading(true);
@@ -84,6 +109,9 @@ export const SessionsPage: React.FC = () => {
     setLoading(false);
     if (res.success && res.data) {
       setActiveSessionId(res.data.id);
+      if (res.data.qrCodeUrl) {
+        setActiveQrUrl(res.data.qrCodeUrl);
+      }
       loadSessions();
     }
   };
