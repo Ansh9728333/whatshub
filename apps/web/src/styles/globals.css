@@ -1,0 +1,52 @@
+@import "tailwindcss";
+
+:root {
+  --app-navy: #1B548C;
+  --app-navy-dark: #173F68;
+  --navigation-hover: #E8F2FA;
+  --navigation-selected: #DCECF8;
+
+  --app-background: #F5F7F9;
+  --surface: #FFFFFF;
+  --surface-secondary: #F8FAFC;
+
+  --chat-outgoing: #C5E6F1;
+  --chat-incoming: #F0F1F2;
+  --chat-internal-note: #FEF3C7;
+
+  --text-primary: #1F2937;
+  --text-secondary: #667085;
+  --text-muted: #9CA3AF;
+  --border: #E2E8F0;
+
+  --brand-green: #10B981;
+  --success: #55B82A;
+  --warning: #F59E0B;
+  --danger: #EF4444;
+  --purple-ai: #7C3AED;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background-color: var(--app-background);
+  color: var(--text-primary);
+}
+
+/* Custom Scrollbar for compact B2B layout */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94A3B8;
+}
