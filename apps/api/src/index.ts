@@ -12,6 +12,9 @@ import * as sessionController from './controllers/sessionController.js';
 import * as inboxController from './controllers/inboxController.js';
 import * as contactController from './controllers/contactController.js';
 import * as campaignController from './controllers/campaignController.js';
+import * as dashboardController from './controllers/dashboardController.js';
+import * as analyticsController from './controllers/analyticsController.js';
+import * as leadsController from './controllers/leadsController.js';
 
 dotenv.config();
 
@@ -49,6 +52,14 @@ app.get('/', (req, res) => {
 const apiRouter = express.Router();
 apiRouter.use(requireAuth);
 apiRouter.use(requireWorkspace);
+
+// Dashboard & Analytics
+apiRouter.get('/dashboard/stats', dashboardController.getDashboardStats);
+apiRouter.get('/analytics', analyticsController.getAnalyticsData);
+
+// Leads Kanban Pipeline
+apiRouter.get('/leads', leadsController.getLeadsPipeline);
+apiRouter.patch('/leads/:id/stage', leadsController.updateLeadStage);
 
 // Sessions
 apiRouter.get('/whatsapp/sessions', sessionController.listSessions);
