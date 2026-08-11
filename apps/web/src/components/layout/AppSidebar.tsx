@@ -69,7 +69,7 @@ export const AppSidebar: React.FC = () => {
             <div className="w-8 h-8 rounded-lg bg-emerald-500 flex items-center justify-center font-bold text-white shadow">
               W
             </div>
-            <span className="font-bold text-lg tracking-tight text-white">WhatsHub</span>
+            <span className="font-bold text-base tracking-tight text-white">WhatsApp AI</span>
           </div>
         )}
         {collapsed && (

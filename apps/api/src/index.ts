@@ -65,6 +65,7 @@ apiRouter.patch('/leads/:id/stage', leadsController.updateLeadStage);
 apiRouter.get('/whatsapp/sessions', sessionController.listSessions);
 apiRouter.post('/whatsapp/sessions', sessionController.createSession);
 apiRouter.get('/whatsapp/sessions/:id/health', sessionController.getSessionHealth);
+apiRouter.get('/whatsapp/sessions/:id/qr', sessionController.getSessionQr);
 apiRouter.post('/whatsapp/sessions/:id/simulate-scan', sessionController.simulateQrScan);
 apiRouter.post('/whatsapp/sessions/:id/disconnect', sessionController.disconnectSession);
 

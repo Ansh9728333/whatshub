@@ -54,7 +54,15 @@ export async function createSession(req: AuthenticatedRequest, res: Response) {
     // Initialize session engine
     await SessionManager.initializeSession(session.id, req.workspaceId!);
 
-    return res.status(201).json({ success: true, data: session });
+    const active = SessionManager.getSession(session.id);
+
+    return res.status(201).json({
+      success: true,
+      data: {
+        ...session,
+        qrCodeUrl: active?.qrCodeUrl,
+      },
+    });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: { message: err.message } });
   }
@@ -81,6 +89,36 @@ export async function getSessionHealth(req: AuthenticatedRequest, res: Response)
         session,
         activeInMemory: !!activeSession,
         qrCodeUrl: activeSession?.qrCodeUrl,
+        qr: activeSession?.qrCodeUrl,
+      },
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: { message: err.message } });
+  }
+}
+
+export async function getSessionQr(req: AuthenticatedRequest, res: Response) {
+  try {
+    const { id } = req.params;
+    const { data: session, error } = await supabaseAdmin
+      .from('whatsapp_sessions')
+      .select('*')
+      .eq('id', id)
+      .eq('workspace_id', req.workspaceId)
+      .single();
+
+    if (error || !session) {
+      return res.status(404).json({ success: false, error: { message: 'Session not found or workspace unauthorized.' } });
+    }
+
+    const activeSession = SessionManager.getSession(id);
+    return res.json({
+      success: true,
+      data: {
+        sessionId: id,
+        status: activeSession?.status || session.status,
+        qr: activeSession?.qrCodeUrl || null,
+        expiresAt: new Date(Date.now() + 60000).toISOString(),
       },
     });
   } catch (err: any) {

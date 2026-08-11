@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { PhoneCall, QrCode, ShieldAlert, CheckCircle2, RefreshCw, Power, Loader2 } from 'lucide-react';
+import { PhoneCall, QrCode, ShieldAlert, CheckCircle2, RefreshCw, Power, Loader2, AlertCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { fetchApi } from '../services/apiClient';
 import { getSocketInstance } from '../services/socketClient';
@@ -20,7 +20,9 @@ export const SessionsPage: React.FC = () => {
   const [showQrModal, setShowQrModal] = useState(false);
   const [activeQrUrl, setActiveQrUrl] = useState<string | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [modalState, setModalState] = useState<'INITIALIZING' | 'QR_REQUIRED' | 'PAIRING' | 'CONNECTED' | 'TIMEOUT'>('INITIALIZING');
   const [loading, setLoading] = useState(false);
+  const [timeoutTimer, setTimeoutTimer] = useState<number>(0);
 
   // Fetch initial workspace sessions
   const loadSessions = async () => {
@@ -46,15 +48,22 @@ export const SessionsPage: React.FC = () => {
     socket.on('session:qr', (data: { sessionId: string; qr: string }) => {
       setActiveQrUrl(data.qr);
       setActiveSessionId(data.sessionId);
+      setModalState('QR_REQUIRED');
     });
 
     socket.on('session:connected', (data: { sessionId: string; phoneNumber: string }) => {
-      setShowQrModal(false);
-      setActiveQrUrl(null);
-      loadSessions();
+      setModalState('CONNECTED');
+      setTimeout(() => {
+        setShowQrModal(false);
+        setActiveQrUrl(null);
+        loadSessions();
+      }, 1500);
     });
 
-    socket.on('session:update', () => {
+    socket.on('session:update', (data: { sessionId: string; status: string }) => {
+      if (data.status === 'PAIRING') {
+        setModalState('PAIRING');
+      }
       loadSessions();
     });
 
@@ -65,36 +74,52 @@ export const SessionsPage: React.FC = () => {
     };
   }, [currentWorkspace, token]);
 
-  // Polling fallback when QR modal is active
+  // Polling fallback & 25-second timeout controller when QR modal is active
   useEffect(() => {
     if (!showQrModal || !activeSessionId || !currentWorkspace || !token) return;
 
+    let secondsElapsed = 0;
     const interval = setInterval(async () => {
-      const res = await fetchApi(`/api/whatsapp/sessions/${activeSessionId}/health`, {
+      secondsElapsed += 2;
+      setTimeoutTimer(secondsElapsed);
+
+      // Dedicated authenticated REST API endpoint for QR recovery
+      const res = await fetchApi(`/api/whatsapp/sessions/${activeSessionId}/qr`, {
         workspaceId: currentWorkspace.id,
         token,
       });
 
       if (res.success && res.data) {
-        if (res.data.qrCodeUrl) {
-          setActiveQrUrl(res.data.qrCodeUrl);
+        if (res.data.qr) {
+          setActiveQrUrl(res.data.qr);
+          setModalState('QR_REQUIRED');
         }
-        if (res.data.session?.status === 'CONNECTED') {
-          setShowQrModal(false);
-          setActiveQrUrl(null);
-          loadSessions();
+        if (res.data.status === 'CONNECTED') {
+          setModalState('CONNECTED');
+          setTimeout(() => {
+            setShowQrModal(false);
+            setActiveQrUrl(null);
+            loadSessions();
+          }, 1500);
         }
+      }
+
+      // Show timeout state after 25 seconds if no QR arrived
+      if (secondsElapsed >= 25 && !activeQrUrl && modalState === 'INITIALIZING') {
+        setModalState('TIMEOUT');
       }
     }, 2000);
 
     return () => clearInterval(interval);
-  }, [showQrModal, activeSessionId, currentWorkspace, token]);
+  }, [showQrModal, activeSessionId, activeQrUrl, modalState, currentWorkspace, token]);
 
   const handleConnectNewSlot = async () => {
     if (!currentWorkspace || !token) return;
     setLoading(true);
     setShowQrModal(true);
+    setModalState('INITIALIZING');
     setActiveQrUrl(null);
+    setTimeoutTimer(0);
 
     const res = await fetchApi('/api/whatsapp/sessions', {
       method: 'POST',
@@ -111,6 +136,7 @@ export const SessionsPage: React.FC = () => {
       setActiveSessionId(res.data.id);
       if (res.data.qrCodeUrl) {
         setActiveQrUrl(res.data.qrCodeUrl);
+        setModalState('QR_REQUIRED');
       }
       loadSessions();
     }
@@ -131,9 +157,9 @@ export const SessionsPage: React.FC = () => {
       {/* Page Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-slate-800">WhatsApp Connections</h1>
+          <h1 className="text-xl font-bold text-slate-800">WhatsApp AI Connections</h1>
           <p className="text-xs text-slate-500">
-            Manage your workspace WhatsApp Web integration slots with durable session persistence.
+            Manage your workspace WhatsApp AI integration slots with durable session persistence.
           </p>
         </div>
         <button
@@ -146,14 +172,14 @@ export const SessionsPage: React.FC = () => {
         </button>
       </div>
 
-      {/* Compliance Disclaimer */}
+      {/* Unofficial WhatsApp Disclaimer */}
       <div className="bg-amber-50/70 border border-amber-200 p-4 rounded-lg flex items-start space-x-3 text-xs text-amber-900">
         <ShieldAlert size={18} className="text-amber-600 shrink-0 mt-0.5" />
         <div>
-          <h4 className="font-bold mb-0.5">Unofficial WhatsApp Connection Disclaimer</h4>
+          <h4 className="font-bold mb-0.5">Unofficial WhatsApp Connection</h4>
           <p className="leading-relaxed text-[11px] text-amber-800">
             This connection uses WhatsApp Web through an unofficial integration and is not endorsed by Meta.
-            WhatsApp may restrict or suspend accounts that violate its policies. Use WhatsHub only for legitimate
+            WhatsApp may restrict or suspend accounts that violate its policies. Use WhatsApp AI only for legitimate
             business communication with recipients who expect or have consented to receive your messages.
           </p>
         </div>
@@ -193,7 +219,7 @@ export const SessionsPage: React.FC = () => {
 
               <div className="bg-slate-50 p-2.5 rounded text-[11px] space-y-1 text-slate-600">
                 <div className="flex justify-between">
-                  <span>Provider</span>
+                  <span>Engine Provider</span>
                   <span className="font-semibold text-slate-800">Baileys (Unofficial)</span>
                 </div>
                 <div className="flex justify-between">
@@ -220,35 +246,77 @@ export const SessionsPage: React.FC = () => {
         )}
       </div>
 
-      {/* Real Authentic QR Code Modal */}
+      {/* Production QR Code State Machine Modal */}
       {showQrModal && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg p-6 max-w-sm w-full shadow-xl text-center space-y-4">
-            <h3 className="text-sm font-bold text-slate-800">Scan QR Code with WhatsApp</h3>
-            <p className="text-xs text-slate-500">
-              Open WhatsApp on your phone → Linked Devices → Link a Device.
-            </p>
-
-            <div className="bg-slate-50 p-4 rounded-lg inline-block mx-auto border border-slate-200 min-h-[200px] flex items-center justify-center">
-              {activeQrUrl ? (
-                <img
-                  src={activeQrUrl}
-                  alt="Authentic WhatsApp QR Code"
-                  className="w-48 h-48 mx-auto rounded border border-slate-300"
-                />
-              ) : (
-                <div className="space-y-2 py-8 text-slate-400">
-                  <Loader2 size={32} className="animate-spin mx-auto text-[#1B548C]" />
-                  <p className="text-xs font-medium text-slate-600">Connecting to Baileys Engine...</p>
-                  <p className="text-[10px] text-slate-400">Generating authentic WhatsApp QR stream</p>
+            
+            {/* INITIALIZING STATE */}
+            {modalState === 'INITIALIZING' && (
+              <div className="space-y-4 py-4">
+                <h3 className="text-sm font-bold text-slate-800">Starting WhatsApp connection…</h3>
+                <p className="text-xs text-slate-500">Preparing a secure connection QR.</p>
+                <div className="bg-slate-50 p-8 rounded-lg border border-slate-200">
+                  <Loader2 size={36} className="animate-spin mx-auto text-[#1B548C]" />
                 </div>
-              )}
-            </div>
+              </div>
+            )}
 
-            <div className="flex items-center justify-center space-x-2 text-xs">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span className="text-slate-500 font-medium">Waiting for WhatsApp phone scan...</span>
-            </div>
+            {/* QR REQUIRED STATE */}
+            {modalState === 'QR_REQUIRED' && activeQrUrl && (
+              <>
+                <h3 className="text-sm font-bold text-slate-800">Scan QR Code with WhatsApp AI</h3>
+                <p className="text-xs text-slate-500">
+                  Open WhatsApp on your phone → Linked Devices → Link a Device.
+                </p>
+                <div className="bg-white p-3 rounded-lg inline-block mx-auto border border-slate-300 shadow-xs">
+                  <img
+                    src={activeQrUrl}
+                    alt="WhatsApp AI QR Code"
+                    className="w-56 h-56 mx-auto rounded object-contain"
+                  />
+                </div>
+                <div className="flex items-center justify-center space-x-2 text-xs">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  <span className="text-slate-600 font-medium">Waiting for phone scan…</span>
+                </div>
+              </>
+            )}
+
+            {/* PAIRING STATE */}
+            {modalState === 'PAIRING' && (
+              <div className="space-y-4 py-4">
+                <h3 className="text-sm font-bold text-slate-800">QR scanned. Connecting WhatsApp AI…</h3>
+                <div className="bg-slate-50 p-8 rounded-lg border border-slate-200">
+                  <Loader2 size={36} className="animate-spin mx-auto text-emerald-600" />
+                </div>
+              </div>
+            )}
+
+            {/* CONNECTED STATE */}
+            {modalState === 'CONNECTED' && (
+              <div className="space-y-4 py-4">
+                <CheckCircle2 size={48} className="text-emerald-500 mx-auto" />
+                <h3 className="text-sm font-bold text-slate-800">WhatsApp connected successfully.</h3>
+              </div>
+            )}
+
+            {/* TIMEOUT STATE */}
+            {modalState === 'TIMEOUT' && (
+              <div className="space-y-3 py-2">
+                <AlertCircle size={32} className="text-amber-500 mx-auto" />
+                <h3 className="text-sm font-bold text-slate-800">WhatsApp QR is taking longer than expected.</h3>
+                <div className="flex space-x-2 pt-2">
+                  <button
+                    onClick={handleConnectNewSlot}
+                    className="flex-1 bg-[#1B548C] hover:bg-[#173F68] text-white text-xs font-semibold py-2 rounded-md transition"
+                  >
+                    Retry Connection
+                  </button>
+                </div>
+              </div>
+            )}
+
             <button
               onClick={() => setShowQrModal(false)}
               className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold py-2 rounded-md transition"
