@@ -9,7 +9,7 @@
   "scripts": {
     "dev:api": "npm --workspace=apps/api run dev",
     "dev:web": "npm --workspace=apps/web run dev",
-    "build": "npm run build --workspaces --if-present",
+    "build": "npm run build --workspace=@whatshub/shared && npm run build --workspace=@whatshub/api && npm run build --workspace=@whatshub/web",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present"
   },
