@@ -40,9 +40,8 @@ export class SessionManager {
    * Initializes a real Baileys WhatsApp session with durable state restore & authentic QR generation.
    */
   public static async initializeSession(sessionId: string, workspaceId: string): Promise<ActiveSession> {
-    // Prevent duplicate simultaneous initializations for the same session
     if (this.initializationLocks.has(sessionId)) {
-      logger.info(`Session ${sessionId} initialization already in progress. Reusing active lock.`);
+      console.log('[WA_DEBUG] initialize-session-locked', { sessionId });
       return this.initializationLocks.get(sessionId)!;
     }
 
@@ -59,7 +58,7 @@ export class SessionManager {
   }
 
   private static async performSessionInitialization(sessionId: string, workspaceId: string): Promise<ActiveSession> {
-    logger.info(`[WA_SOCKET_CREATING] Initializing Baileys session ${sessionId} for workspace ${workspaceId}`);
+    console.log('[WA_DEBUG] initialize-session', { sessionId, workspaceId });
     
     // Fetch session record from database
     const { data: dbSession } = await supabaseAdmin
@@ -89,7 +88,7 @@ export class SessionManager {
     this.activeSessions.set(sessionId, activeSession);
     await this.updateSessionStatusInDb(sessionId, 'INITIALIZING');
 
-    // Setup local temp auth directory for Baileys state
+    // Setup local temp auth directory for Baileys state - uniquely isolated per sessionId
     const tempAuthDir = path.join(process.cwd(), '.baileys-auth', sessionId);
     if (!fs.existsSync(tempAuthDir)) {
       fs.mkdirSync(tempAuthDir, { recursive: true });
@@ -104,33 +103,40 @@ export class SessionManager {
 
     if (authStateRow && authStateRow.encrypted_state) {
       try {
-        logger.info(`Durable encrypted auth state found for session ${sessionId}. Restoring into temp filesystem...`);
+        console.log('[WA_DEBUG] restoring-auth-state', { sessionId });
         const decryptedJson = EncryptionService.decrypt(authStateRow.encrypted_state);
         const fileMap: Record<string, string> = JSON.parse(decryptedJson);
 
         for (const [filename, fileContent] of Object.entries(fileMap)) {
           fs.writeFileSync(path.join(tempAuthDir, filename), fileContent, 'utf-8');
         }
-        logger.info(`Successfully restored ${Object.keys(fileMap).length} auth files for session ${sessionId}`);
       } catch (err: any) {
-        logger.warn(`Failed restoring durable auth state for session ${sessionId}: ${err.message}. Falling back to new QR scan.`);
+        console.log('[WA_DEBUG] restore-auth-failed', { sessionId, message: err.message });
       }
     }
 
     // Connect Baileys WASocket
     try {
       const { state, saveCreds } = await useMultiFileAuthState(tempAuthDir);
+
+      console.log('[WA_DEBUG] auth-state', {
+        sessionId,
+        registered: Boolean(state?.creds?.registered),
+      });
+
+      console.log('[WA_DEBUG] version-fetch-start');
       let version: [number, number, number] = [2, 3000, 1017531287];
       try {
         const fetched = await fetchLatestBaileysVersion();
         if (fetched && fetched.version) {
           version = fetched.version;
+          console.log('[WA_DEBUG] version-fetch-success', { version: version.join('.') });
         }
-      } catch (vErr) {
-        logger.warn('Using fallback Baileys version array.');
+      } catch (vErr: any) {
+        console.error('[WA_DEBUG] version-fetch-failed', { message: vErr.message });
       }
 
-      logger.info(`[WA_SOCKET_CREATING] Connecting Baileys socket for session ${sessionId} using WhatsApp Web v${version.join('.')}`);
+      console.log('[WA_DEBUG] before-makeWASocket', { sessionId });
 
       const sock = makeWASocket({
         version,
@@ -139,12 +145,13 @@ export class SessionManager {
         browser: ['WhatsApp AI', 'Chrome', '1.0.0'],
       });
 
-      activeSession.socket = sock;
-      logger.info(`[WA_SOCKET_CREATED] Baileys socket instance created for session ${sessionId}`);
+      console.log('[WA_DEBUG] after-makeWASocket', { sessionId });
 
-      // Crucial Baileys credential update handler
+      activeSession.socket = sock;
+
+      // Handle Baileys credential persistence
       sock.ev.on('creds.update', async () => {
-        logger.info(`[WA_CREDS_UPDATE] Credentials updated for session ${sessionId}`);
+        console.log('[WA_DEBUG] creds.update', { sessionId });
         await saveCreds();
       });
 
@@ -152,10 +159,25 @@ export class SessionManager {
       sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
-        logger.info(`[WA_CONNECTION_UPDATE] session: ${sessionId}, connection: ${connection}, hasQr: ${Boolean(qr)}, hasLastDisconnect: ${Boolean(lastDisconnect)}`);
+        const statusCode =
+          (lastDisconnect?.error as any)?.output?.statusCode ??
+          (lastDisconnect?.error as any)?.statusCode ??
+          null;
+
+        console.log('[WA_DEBUG] connection.update', {
+          sessionId,
+          connection: connection ?? null,
+          hasQr: Boolean(qr),
+          statusCode,
+          hasLastDisconnect: Boolean(lastDisconnect),
+        });
 
         if (qr) {
-          logger.info(`[WA_QR_GENERATED] session: ${sessionId}, qrLength: ${qr.length}`);
+          console.log('[WA_DEBUG] REAL QR RECEIVED', {
+            sessionId,
+            qrLength: qr.length,
+          });
+
           try {
             const qrDataUrl = await QRCode.toDataURL(qr);
             activeSession.status = 'QR_REQUIRED';
@@ -171,16 +193,16 @@ export class SessionManager {
 
             this.broadcastEvent(workspaceId, 'session:qr', qrPayload);
             this.broadcastEvent(workspaceId, 'session:update', { sessionId, status: 'QR_REQUIRED' });
-            logger.info(`[WA_QR_SOCKET_EMIT] session: ${sessionId}, room: workspace:${workspaceId}`);
+            console.log('[WA_DEBUG] session:qr emitted', { sessionId, room: `workspace:${workspaceId}` });
           } catch (qrErr: any) {
-            logger.error(`Error converting Baileys QR code to image: ${qrErr.message}`);
+            console.error('[WA_DEBUG] qr-data-url-failed', { message: qrErr.message });
           }
         }
 
         if (connection === 'open') {
           const userJid = sock.user?.id || '';
           const phoneE164 = userJid.split(':')[0] || 'connected';
-          logger.info(`[WA_CONNECTION_OPEN] WhatsApp session ${sessionId} successfully connected for account ${phoneE164}`);
+          console.log('[WA_DEBUG] connection-open', { sessionId, phoneE164 });
 
           activeSession.status = 'CONNECTED';
           activeSession.qrCodeUrl = undefined;
@@ -194,7 +216,6 @@ export class SessionManager {
             last_error: null,
           }).eq('id', sessionId);
 
-          // Save durable auth state to Supabase for Railway restart recovery
           await this.persistAuthStateToSupabase(sessionId, tempAuthDir);
 
           this.broadcastEvent(workspaceId, 'session:connected', {
@@ -206,10 +227,8 @@ export class SessionManager {
         }
 
         if (connection === 'close') {
-          const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
           const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-
-          logger.warn(`[WA_CONNECTION_CLOSED] session: ${sessionId}, statusCode: ${statusCode}, shouldReconnect: ${shouldReconnect}`);
+          console.log('[WA_DEBUG] connection-closed', { sessionId, statusCode, shouldReconnect });
 
           if (shouldReconnect) {
             activeSession.status = 'RECONNECTING';
@@ -217,7 +236,7 @@ export class SessionManager {
             this.broadcastEvent(workspaceId, 'session:update', { sessionId, status: 'RECONNECTING' });
             
             setTimeout(() => {
-              this.initializeSession(sessionId, workspaceId).catch((e) => logger.error(`Reconnect error: ${e.message}`));
+              this.initializeSession(sessionId, workspaceId).catch((e) => console.error('[WA_DEBUG] reconnect-failed', { message: e.message }));
             }, 5000);
           } else {
             activeSession.status = 'LOGGED_OUT';
@@ -243,7 +262,7 @@ export class SessionManager {
 
       return activeSession;
     } catch (err: any) {
-      logger.error(`[WA_SOCKET_ERROR] Baileys socket creation failed for session ${sessionId}: ${err.message}`);
+      console.error('[WA_DEBUG] makeWASocket-failed', { sessionId, message: err.message });
       activeSession.status = 'ERROR';
       await this.updateSessionStatusInDb(sessionId, 'ERROR');
       this.broadcastEvent(workspaceId, 'session:update', { sessionId, status: 'ERROR' });
@@ -262,9 +281,6 @@ export class SessionManager {
         msg.message.extendedTextMessage?.text ||
         '[Media Message]';
 
-      logger.info(`Received WhatsApp message from ${phoneE164} for workspace ${workspaceId}: "${textContent}"`);
-
-      // 1. Create or update Contact
       let { data: contact } = await supabaseAdmin
         .from('contacts')
         .select('*')
@@ -288,7 +304,6 @@ export class SessionManager {
 
       if (!contact) return;
 
-      // 2. Create or update Conversation
       let { data: conversation } = await supabaseAdmin
         .from('conversations')
         .select('*')
@@ -325,7 +340,6 @@ export class SessionManager {
 
       if (!conversation) return;
 
-      // 3. Persist Message to DB
       const { data: savedMsg } = await supabaseAdmin
         .from('messages')
         .insert({
@@ -341,7 +355,6 @@ export class SessionManager {
         .select()
         .single();
 
-      // 4. Emit Realtime Events via Socket.IO
       this.broadcastEvent(workspaceId, 'message:new', {
         conversationId: conversation.id,
         message: savedMsg,
@@ -379,24 +392,18 @@ export class SessionManager {
         },
         { onConflict: 'session_id' }
       );
-
-      logger.info(`Durable encrypted auth state saved to Supabase for session ${sessionId}`);
     } catch (err: any) {
       logger.error(`Failed persisting auth state to Supabase: ${err.message}`);
     }
   }
 
   public static async restoreAllSessions() {
-    logger.info('Restoring active WhatsApp sessions from database...');
     const { data: sessions } = await supabaseAdmin
       .from('whatsapp_sessions')
       .select('*')
       .eq('is_active', true);
 
-    if (!sessions || sessions.length === 0) {
-      logger.info('No active sessions to restore.');
-      return;
-    }
+    if (!sessions || sessions.length === 0) return;
 
     for (const session of sessions) {
       try {
@@ -446,13 +453,11 @@ export class SessionManager {
       is_active: false,
     }).eq('id', sessionId);
 
-    // Clean up local auth files
     const tempAuthDir = path.join(process.cwd(), '.baileys-auth', sessionId);
     if (fs.existsSync(tempAuthDir)) {
       fs.rmSync(tempAuthDir, { recursive: true, force: true });
     }
 
-    // Delete encrypted auth state from DB
     await supabaseAdmin.from('whatsapp_auth_states').delete().eq('session_id', sessionId);
   }
 

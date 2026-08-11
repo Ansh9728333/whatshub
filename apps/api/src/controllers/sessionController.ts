@@ -21,6 +21,12 @@ export async function listSessions(req: AuthenticatedRequest, res: Response) {
 
 export async function createSession(req: AuthenticatedRequest, res: Response) {
   try {
+    console.log('[WA_DEBUG] create-slot-request', {
+      workspaceId: req.workspaceId,
+      userId: req.user.id,
+      body: req.body,
+    });
+
     const parse = CreateSessionSchema.safeParse(req.body);
     if (!parse.success) {
       return res.status(400).json({ success: false, error: { message: parse.error.message } });
@@ -28,7 +34,6 @@ export async function createSession(req: AuthenticatedRequest, res: Response) {
 
     const { display_name, provider } = parse.data;
 
-    // Check count of active sessions for slot number
     const { count } = await supabaseAdmin
       .from('whatsapp_sessions')
       .select('*', { count: 'exact', head: true })
@@ -51,6 +56,8 @@ export async function createSession(req: AuthenticatedRequest, res: Response) {
 
     if (error) throw error;
 
+    console.log('[WA_DEBUG] session-db-created', { sessionId: session.id });
+
     // Initialize session engine
     await SessionManager.initializeSession(session.id, req.workspaceId!);
 
@@ -64,6 +71,7 @@ export async function createSession(req: AuthenticatedRequest, res: Response) {
       },
     });
   } catch (err: any) {
+    console.error('[WA_DEBUG] createSession-error', { message: err.message });
     return res.status(500).json({ success: false, error: { message: err.message } });
   }
 }
