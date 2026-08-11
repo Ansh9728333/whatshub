@@ -1,12 +1,106 @@
-import React, { useState } from 'react';
-import { PhoneCall, QrCode, ShieldAlert, CheckCircle2, RefreshCw, Power } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { PhoneCall, QrCode, ShieldAlert, CheckCircle2, RefreshCw, Power, Loader2 } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { fetchApi } from '../services/apiClient';
+import { getSocketInstance } from '../services/socketClient';
+
+interface SessionData {
+  id: string;
+  display_name: string;
+  phone_number?: string;
+  status: string;
+  slot_number: number;
+  provider: string;
+  qrCodeUrl?: string;
+}
 
 export const SessionsPage: React.FC = () => {
+  const { currentWorkspace, token } = useAuth();
+  const [sessions, setSessions] = useState<SessionData[]>([]);
   const [showQrModal, setShowQrModal] = useState(false);
+  const [activeQrUrl, setActiveQrUrl] = useState<string | null>(null);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  // Fetch initial workspace sessions
+  const loadSessions = async () => {
+    if (!currentWorkspace || !token) return;
+    const res = await fetchApi('/api/whatsapp/sessions', {
+      workspaceId: currentWorkspace.id,
+      token,
+    });
+    if (res.success && res.data) {
+      setSessions(res.data);
+    }
+  };
+
+  useEffect(() => {
+    loadSessions();
+
+    // Subscribe to Socket.IO events for workspace
+    const socket = getSocketInstance();
+    if (currentWorkspace) {
+      socket.emit('join:workspace', currentWorkspace.id);
+    }
+
+    socket.on('session:qr', (data: { sessionId: string; qr: string }) => {
+      setActiveQrUrl(data.qr);
+      setActiveSessionId(data.sessionId);
+    });
+
+    socket.on('session:connected', (data: { sessionId: string; phoneNumber: string }) => {
+      setShowQrModal(false);
+      setActiveQrUrl(null);
+      loadSessions();
+    });
+
+    socket.on('session:update', () => {
+      loadSessions();
+    });
+
+    return () => {
+      socket.off('session:qr');
+      socket.off('session:connected');
+      socket.off('session:update');
+    };
+  }, [currentWorkspace, token]);
+
+  const handleConnectNewSlot = async () => {
+    if (!currentWorkspace || !token) return;
+    setLoading(true);
+    setShowQrModal(true);
+    setActiveQrUrl(null);
+
+    const res = await fetchApi('/api/whatsapp/sessions', {
+      method: 'POST',
+      workspaceId: currentWorkspace.id,
+      token,
+      body: JSON.stringify({
+        display_name: `Support Line #${sessions.length + 1}`,
+        provider: 'baileys',
+      }),
+    });
+
+    setLoading(false);
+    if (res.success && res.data) {
+      setActiveSessionId(res.data.id);
+      loadSessions();
+    }
+  };
+
+  const handleDisconnect = async (sessionId: string) => {
+    if (!currentWorkspace || !token) return;
+    await fetchApi(`/api/whatsapp/sessions/${sessionId}/disconnect`, {
+      method: 'POST',
+      workspaceId: currentWorkspace.id,
+      token,
+    });
+    loadSessions();
+  };
 
   return (
     <div className="flex-1 overflow-y-auto p-6 space-y-6">
-      {/* Header */}
+      {/* Page Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-slate-800">WhatsApp Connections</h1>
@@ -15,10 +109,11 @@ export const SessionsPage: React.FC = () => {
           </p>
         </div>
         <button
-          onClick={() => setShowQrModal(true)}
-          className="flex items-center space-x-2 bg-[#1B548C] hover:bg-[#173F68] text-white text-xs font-semibold px-4 py-2 rounded-md shadow-xs transition"
+          onClick={handleConnectNewSlot}
+          disabled={loading}
+          className="flex items-center space-x-2 bg-[#1B548C] hover:bg-[#173F68] text-white text-xs font-semibold px-4 py-2 rounded-md shadow-xs transition disabled:opacity-50"
         >
-          <QrCode size={14} />
+          {loading ? <Loader2 size={14} className="animate-spin" /> : <QrCode size={14} />}
           <span>Connect New Slot</span>
         </button>
       </div>
@@ -38,52 +133,66 @@ export const SessionsPage: React.FC = () => {
 
       {/* Sessions Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Session Card 1 */}
-        <div className="bg-white border border-[#E2E8F0] rounded-lg p-4 shadow-xs space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2">
-              <div className="p-2 rounded-lg bg-blue-50 text-[#1B548C]">
-                <PhoneCall size={18} />
+        {sessions.length === 0 ? (
+          <div className="col-span-2 bg-white border border-[#E2E8F0] p-8 rounded-lg text-center text-slate-500 text-xs">
+            No active WhatsApp slots. Click <strong>Connect New Slot</strong> to pair your WhatsApp account.
+          </div>
+        ) : (
+          sessions.map((session) => (
+            <div key={session.id} className="bg-white border border-[#E2E8F0] rounded-lg p-4 shadow-xs space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <div className="p-2 rounded-lg bg-blue-50 text-[#1B548C]">
+                    <PhoneCall size={18} />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-bold text-slate-800">{session.display_name}</h3>
+                    <p className="text-[11px] text-slate-400">{session.phone_number || 'Slot #' + session.slot_number}</p>
+                  </div>
+                </div>
+                <span
+                  className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full flex items-center ${
+                    session.status === 'CONNECTED'
+                      ? 'bg-emerald-100 text-emerald-700'
+                      : session.status === 'QR_REQUIRED'
+                      ? 'bg-amber-100 text-amber-800 animate-pulse'
+                      : 'bg-slate-100 text-slate-700'
+                  }`}
+                >
+                  <CheckCircle2 size={11} className="mr-1" /> {session.status}
+                </span>
               </div>
-              <div>
-                <h3 className="text-xs font-bold text-slate-800">Primary Support Slot #1</h3>
-                <p className="text-[11px] text-slate-400">+1 (415) 555-0199</p>
+
+              <div className="bg-slate-50 p-2.5 rounded text-[11px] space-y-1 text-slate-600">
+                <div className="flex justify-between">
+                  <span>Provider</span>
+                  <span className="font-semibold text-slate-800">Baileys (Unofficial)</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Durable Storage</span>
+                  <span className="font-semibold text-emerald-600">Encrypted (AES-256)</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Railway Reconnect</span>
+                  <span className="font-semibold text-slate-800">Auto-Restore Enabled</span>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end space-x-2 pt-1 border-t border-slate-100">
+                <button
+                  onClick={() => handleDisconnect(session.id)}
+                  className="flex items-center space-x-1 text-xs font-semibold text-red-600 hover:bg-red-50 px-2.5 py-1.5 rounded transition"
+                >
+                  <Power size={13} />
+                  <span>Disconnect</span>
+                </button>
               </div>
             </div>
-            <span className="bg-emerald-100 text-emerald-700 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center">
-              <CheckCircle2 size={11} className="mr-1" /> CONNECTED
-            </span>
-          </div>
-
-          <div className="bg-slate-50 p-2.5 rounded text-[11px] space-y-1 text-slate-600">
-            <div className="flex justify-between">
-              <span>Provider</span>
-              <span className="font-semibold text-slate-800">Baileys (Unofficial)</span>
-            </div>
-            <div className="flex justify-between">
-              <span>Durable Storage</span>
-              <span className="font-semibold text-emerald-600">Encrypted (AES-256)</span>
-            </div>
-            <div className="flex justify-between">
-              <span>Railway Reconnect</span>
-              <span className="font-semibold text-slate-800">Auto-Restore Enabled</span>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-end space-x-2 pt-1 border-t border-slate-100">
-            <button className="flex items-center space-x-1 text-xs font-semibold text-slate-600 hover:bg-slate-100 px-2.5 py-1.5 rounded transition">
-              <RefreshCw size={13} />
-              <span>Reconnect</span>
-            </button>
-            <button className="flex items-center space-x-1 text-xs font-semibold text-red-600 hover:bg-red-50 px-2.5 py-1.5 rounded transition">
-              <Power size={13} />
-              <span>Disconnect</span>
-            </button>
-          </div>
-        </div>
+          ))
+        )}
       </div>
 
-      {/* QR Modal Simulator */}
+      {/* Real Authentic QR Code Modal */}
       {showQrModal && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg p-6 max-w-sm w-full shadow-xl text-center space-y-4">
@@ -91,16 +200,26 @@ export const SessionsPage: React.FC = () => {
             <p className="text-xs text-slate-500">
               Open WhatsApp on your phone → Linked Devices → Link a Device.
             </p>
-            <div className="bg-slate-100 p-4 rounded-lg inline-block mx-auto border border-slate-200">
-              <img
-                src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=whatshub-auth-demo"
-                alt="QR Code"
-                className="w-44 h-44 mx-auto"
-              />
+
+            <div className="bg-slate-50 p-4 rounded-lg inline-block mx-auto border border-slate-200 min-h-[200px] flex items-center justify-center">
+              {activeQrUrl ? (
+                <img
+                  src={activeQrUrl}
+                  alt="Authentic WhatsApp QR Code"
+                  className="w-48 h-48 mx-auto rounded border border-slate-300"
+                />
+              ) : (
+                <div className="space-y-2 py-8 text-slate-400">
+                  <Loader2 size={32} className="animate-spin mx-auto text-[#1B548C]" />
+                  <p className="text-xs font-medium text-slate-600">Connecting to Baileys Engine...</p>
+                  <p className="text-[10px] text-slate-400">Generating authentic WhatsApp QR stream</p>
+                </div>
+              )}
             </div>
+
             <div className="flex items-center justify-center space-x-2 text-xs">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span className="text-slate-500 font-medium">Waiting for QR scan...</span>
+              <span className="text-slate-500 font-medium">Waiting for WhatsApp phone scan...</span>
             </div>
             <button
               onClick={() => setShowQrModal(false)}
